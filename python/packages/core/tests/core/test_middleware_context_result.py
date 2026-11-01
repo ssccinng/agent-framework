@@ -81,7 +81,7 @@ class TestResultOverrideMiddleware:
 
         context = AgentContext(agent=mock_agent, messages=[Message(role="user", contents=["test"])], stream=True)
 
-        async def final_handler(_: AgentContext) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
+        def final_handler(_: AgentContext) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
             raise AssertionError("final handler should not run after termination")
 
         result = await AgentMiddlewarePipeline(TerminatingMiddleware()).execute(context, final_handler)
@@ -139,7 +139,7 @@ class TestResultOverrideMiddleware:
             stream=True,
         )
 
-        async def final_handler(_: ChatContext) -> ResponseStream[ChatResponseUpdate, ChatResponse]:
+        def final_handler(_: ChatContext) -> ResponseStream[ChatResponseUpdate, ChatResponse]:
             raise AssertionError("final handler should not run after termination")
 
         result = await ChatMiddlewarePipeline(TerminatingMiddleware()).execute(context, final_handler)
@@ -192,7 +192,9 @@ class TestResultOverrideMiddleware:
 
     @pytest.mark.parametrize("termination_result", [None, "exception response"])
     async def test_agent_context_result_precedes_optional_termination_result(
-        self, mock_agent: SupportsAgentRun, termination_result: object | None
+        self,
+        mock_agent: SupportsAgentRun,
+        termination_result: object | None,
     ) -> None:
         expected = AgentResponse(messages=[Message(role="assistant", contents=["context response"])])
 
@@ -212,7 +214,8 @@ class TestResultOverrideMiddleware:
 
     @pytest.mark.parametrize("termination_result", [None, "exception response"])
     async def test_chat_context_result_precedes_optional_termination_result(
-        self, termination_result: object | None
+        self,
+        termination_result: object | None,
     ) -> None:
         expected = ChatResponse(messages=[Message(role="assistant", contents=["context response"])])
 
@@ -399,7 +402,7 @@ class TestResultOverrideMiddleware:
         async for update in agent.run(normal_messages, stream=True):
             normal_updates.append(update)
 
-        assert len(normal_updates) == 2
+        assert len([update for update in normal_updates if update.contents]) == 2
         assert normal_updates[0].text == "test streaming response "
         assert normal_updates[1].text == "another update"
 

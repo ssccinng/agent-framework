@@ -72,7 +72,8 @@ class TestChatMiddleware:
         streamed_updates = [update async for update in stream]
         final_response = await stream.get_final_response()
 
-        assert [update.text for update in streamed_updates] == ["terminated chat stream"]
+        # Agent.run also emits updates containing only response metadata.
+        assert [update.text for update in streamed_updates if update.contents] == ["terminated chat stream"]
         assert all(isinstance(update, AgentResponseUpdate) for update in streamed_updates)
         assert isinstance(final_response, AgentResponse)
         assert final_response.text == "terminated chat stream"

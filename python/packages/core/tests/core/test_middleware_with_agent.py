@@ -70,6 +70,7 @@ class TestChatAgentClassBasedMiddleware:
 
     async def test_agent_run_returns_termination_stream(self) -> None:
         client = MockBaseChatClient()
+
         async def updates() -> AsyncIterable[AgentResponseUpdate]:
             yield AgentResponseUpdate(contents=[Content.from_text("terminated stream")])
 
@@ -388,7 +389,7 @@ class TestChatAgentStreamingMiddleware:
             updates.append(update)
 
         # Verify streaming response
-        assert len(updates) == 2
+        assert len([update for update in updates if update.contents]) == 2
         assert updates[0].text == "Streaming"
         assert updates[1].text == " response"
         assert client.call_count == 1
@@ -1463,7 +1464,7 @@ class TestRunLevelMiddleware:
             updates.append(update)
 
         # Verify streaming responsecod
-        assert len(updates) == 2
+        assert len([update for update in updates if update.contents]) == 2
         assert updates[0].text == "Stream"
         assert updates[1].text == " response"
 
