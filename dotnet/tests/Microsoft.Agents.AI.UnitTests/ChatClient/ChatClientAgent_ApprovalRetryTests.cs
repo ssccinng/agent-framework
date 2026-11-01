@@ -422,7 +422,7 @@ public class ChatClientAgent_ApprovalRetryTests
         var agent = CreateAgent(client, () => { toolInvocations++; return "Sunny"; }, perServiceCallPersistence);
         var session = await agent.CreateSessionAsync();
         Task<AgentResponse> RunAsync(IEnumerable<ChatMessage> messages, CancellationToken ct = default) => streaming
-            ? agent.RunStreamingAsync(messages, session, cancellationToken: ct).ToAgentResponseAsync()
+            ? agent.RunStreamingAsync(messages, session, cancellationToken: ct).ToAgentResponseAsync(ct)
             : agent.RunAsync(messages, session, cancellationToken: ct);
         var first = await RunAsync([new ChatMessage(ChatRole.User, "Weather?")]);
         var request = Assert.Single(GetApprovalRequests(first));

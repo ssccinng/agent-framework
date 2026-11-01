@@ -13,6 +13,7 @@ namespace Microsoft.Agents.AI.UnitTests;
 public class ApprovalResponseBindingChatClientTests
 {
     private const string RequestId = "ficc_call1";
+    private static readonly string[] s_unansweredCallIds = ["call1", "call2"];
 
     [Fact]
     public void PrepareApprovalMessages_TwoCompletedCycles_PreservesOriginalOrder()
@@ -678,11 +679,24 @@ public class ApprovalResponseBindingChatClientTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task GetResponseAsync_UnansweredRequests_AreRejectedWithoutChangingInputAsync(bool streaming, bool emptyInput)
+    [InlineData(false, false, null)]
+    [InlineData(false, false, "")]
+    [InlineData(false, false, " \t ")]
+    [InlineData(false, false, "conversation")]
+    [InlineData(false, true, null)]
+    [InlineData(false, true, "")]
+    [InlineData(false, true, " \t ")]
+    [InlineData(false, true, "conversation")]
+    [InlineData(true, false, null)]
+    [InlineData(true, false, "")]
+    [InlineData(true, false, " \t ")]
+    [InlineData(true, false, "conversation")]
+    [InlineData(true, true, null)]
+    [InlineData(true, true, "")]
+    [InlineData(true, true, " \t ")]
+    [InlineData(true, true, "conversation")]
+    public async Task GetResponseAsync_UnansweredRequests_AreRejectedWithoutChangingInputAsync(
+        bool streaming, bool emptyInput, string? conversationId)
     {
         // Arrange
         var session = new ChatClientAgentSession();
@@ -702,23 +716,19 @@ public class ApprovalResponseBindingChatClientTests
         var decorator = new ApprovalResponseBindingChatClient(inner);
         var message = new ChatMessage(ChatRole.User, "New question.");
         List<ChatMessage> input = emptyInput ? [] : [message];
+        var options = new ChatOptions { ConversationId = conversationId };
 
         // Act
-        if (streaming)
-        {
-            await RunStreamingAsync(decorator, session, input);
-        }
-        else
-        {
-            await RunAsync(decorator, session, input);
-        }
+        ChatResponse response = streaming
+            ? await RunStreamingAsync(decorator, session, input, options)
+            : await RunAsync(decorator, session, input, options);
 
         // Assert
         Assert.Equal(emptyInput ? 0 : 1, input.Count);
         Assert.IsType<TextContent>(Assert.Single(message.Contents));
         if (!emptyInput)
         {
-            Assert.Same(message, capture.Messages![3]);
+            Assert.Same(message, capture.Messages![string.IsNullOrWhiteSpace(conversationId) ? 3 : 2]);
         }
 
         var responses = capture.Messages!.SelectMany(m => m.Contents).OfType<ToolApprovalResponseContent>().ToList();
@@ -731,12 +741,38 @@ public class ApprovalResponseBindingChatClientTests
             Assert.Equal("No approval response was provided for this approval required tool call.", r.Reason);
         });
         Assert.NotNull(capture.Messages);
-        Assert.Equal(ChatRole.Assistant, capture.Messages[1].Role);
-        Assert.Equal(new[] { "call1", "call2" }, capture.Messages[1].Contents.OfType<FunctionCallContent>().Select(c => c.CallId));
-        Assert.All(capture.Messages[1].Contents, c => Assert.True(Assert.IsType<FunctionCallContent>(c).InformationalOnly));
-        Assert.Equal(ChatRole.Tool, capture.Messages[2].Role);
-        var results = capture.Messages[2].Contents.Cast<FunctionResultContent>().ToList();
-        Assert.Equal(new[] { "call1", "call2" }, results.Select(r => r.CallId));
+        List<ChatMessage> capturedMessages = capture.Messages!;
+        List<ChatMessage> downstreamCalls = capturedMessages.Where(m => m.Contents.OfType<FunctionCallContent>().Any()).ToList();
+        List<ChatMessage> downstreamResults = capturedMessages.Where(m => m.Contents.OfType<FunctionResultContent>().Any()).ToList();
+        List<ChatMessage> returnedCalls = response.Messages.Where(m => m.Contents.OfType<FunctionCallContent>().Any()).ToList();
+        List<ChatMessage> returnedResults = response.Messages.Where(m => m.Contents.OfType<FunctionResultContent>().Any()).ToList();
+
+        if (string.IsNullOrWhiteSpace(conversationId))
+        {
+            ChatMessage downstreamCallMessage = Assert.Single(downstreamCalls);
+            Assert.Equal(ChatRole.Assistant, downstreamCallMessage.Role);
+            Assert.Equal(s_unansweredCallIds, downstreamCallMessage.Contents.OfType<FunctionCallContent>().Select(c => c.CallId));
+            Assert.All(downstreamCallMessage.Contents, c => Assert.True(Assert.IsType<FunctionCallContent>(c).InformationalOnly));
+            ChatMessage downstreamResultMessage = Assert.Single(downstreamResults);
+            Assert.Equal(ChatRole.Tool, downstreamResultMessage.Role);
+            Assert.Equal(s_unansweredCallIds, downstreamResultMessage.Contents.OfType<FunctionResultContent>().Select(r => r.CallId));
+            Assert.Equal(capturedMessages.IndexOf(downstreamCallMessage) + 1, capturedMessages.IndexOf(downstreamResultMessage));
+        }
+        else
+        {
+            Assert.Empty(downstreamCalls);
+            ChatMessage downstreamResultMessage = Assert.Single(downstreamResults);
+            Assert.Equal(ChatRole.Tool, downstreamResultMessage.Role);
+            Assert.Equal(s_unansweredCallIds, downstreamResultMessage.Contents.OfType<FunctionResultContent>().Select(r => r.CallId));
+        }
+
+        ChatMessage returnedCallMessage = Assert.Single(returnedCalls);
+        Assert.Equal(ChatRole.Assistant, returnedCallMessage.Role);
+        Assert.Equal(s_unansweredCallIds, returnedCallMessage.Contents.OfType<FunctionCallContent>().Select(c => c.CallId));
+        Assert.Equal(ChatRole.Tool, Assert.Single(returnedResults).Role);
+        Assert.Equal(response.Messages.IndexOf(returnedCallMessage) + 1, response.Messages.IndexOf(returnedResults[0]));
+        var results = returnedResults[0].Contents.Cast<FunctionResultContent>().ToList();
+        Assert.Equal(s_unansweredCallIds, results.Select(r => r.CallId));
         Assert.All(results, r => Assert.Equal(
             "Tool call invocation rejected. No approval response was provided for this approval required tool call.", r.Result));
         Assert.False(HasPendingRequest(session, RequestId));
@@ -1436,12 +1472,13 @@ public class ApprovalResponseBindingChatClientTests
         return mock.Object;
     }
 
-    private static async Task RunStreamingAsync(
+    private static async Task<ChatResponse> RunStreamingAsync(
         ApprovalResponseBindingChatClient decorator,
         AgentSession session,
         IList<ChatMessage> input,
         ChatOptions? options = null)
     {
+        ChatResponse? response = null;
         var agent = new TestAIAgent
         {
             RunAsyncFunc = async (_, _, _, ct) =>
@@ -1452,11 +1489,13 @@ public class ApprovalResponseBindingChatClientTests
                     updates.Add(update);
                 }
 
-                return new AgentResponse(updates.ToChatResponse());
+                response = updates.ToChatResponse();
+                return new AgentResponse(response);
             }
         };
 
         await agent.RunAsync([new ChatMessage(ChatRole.User, "drive")], session);
+        return response!;
     }
 
 #pragma warning disable CS1998 // Async method lacks 'await' operators

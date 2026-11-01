@@ -384,7 +384,7 @@ internal sealed partial class ApprovalResponseBindingChatClient : DelegatingChat
 
                 // Match FICC's history policy: downstream history already contains the model's calls.
                 // Always return the call/result pair for callers that save history at the end of the run.
-                toolMessages = options?.ConversationId is null ? [calls, results] : [results];
+                toolMessages = string.IsNullOrWhiteSpace(options?.ConversationId) ? [calls, results] : [results];
             }
         }
 

@@ -14,7 +14,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
-using Xunit;
 
 namespace Microsoft.Agents.AI.UnitTests;
 
@@ -50,6 +49,23 @@ public sealed class OpenFixApprovalResultTests
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, transcript));
     }
 
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(false, " \t ")]
+    [InlineData(true, "")]
+    [InlineData(true, " \t ")]
+    public async Task DefaultStack_BlankConversationIdPersistsGeneratedCallAndResultOnceAsync(bool streaming, string conversationId)
+    {
+        List<string> transcript = [];
+        var failures = await RunCaseAsync(streaming, "unanswered", false, message =>
+        {
+            transcript.Add(message);
+            Console.WriteLine(message);
+        }, conversationId);
+
+        Assert.True(failures.Count == 0, string.Join(Environment.NewLine, transcript));
+    }
+
 #if NET
     /// <summary>Checks package versions against the assemblies actually loaded by the test process.</summary>
     [Fact]
@@ -72,7 +88,8 @@ public sealed class OpenFixApprovalResultTests
     }
 #endif
 
-    private static async Task<List<string>> RunCaseAsync(bool streaming, string mode, bool perServiceCallPersistence, Action<string> log)
+    private static async Task<List<string>> RunCaseAsync(
+        bool streaming, string mode, bool perServiceCallPersistence, Action<string> log, string? conversationId = null)
     {
         var failures = new List<string>();
         void Check(bool condition, string message)
@@ -98,6 +115,7 @@ public sealed class OpenFixApprovalResultTests
         {
             ChatOptions = new ChatOptions
             {
+                ConversationId = conversationId,
                 Tools = [new ApprovalRequiredAIFunction(AIFunctionFactory.Create(() =>
                 {
                     Interlocked.Increment(ref executions);
@@ -158,6 +176,11 @@ public sealed class OpenFixApprovalResultTests
         Check(persistedResults.Count(r => r.CallId == "old") == 1, "history persists exactly one old-call result");
         Check(string.Equals(persistedResults.Single(r => r.CallId == "old").Result?.ToString(), old, StringComparison.Ordinal),
             "history preserves the model-visible old-call result");
+        var returnedCalls = response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>().ToArray();
+        Check(returnedCalls.Count(c => c.CallId == "old") == 1, "caller receives exactly one old-call call");
+        var persistedCalls = ChatClientAgentTestHelper.GetPersistedHistory(agent, session)
+            .SelectMany(m => m.Contents).OfType<FunctionCallContent>().ToArray();
+        Check(persistedCalls.Count(c => c.CallId == "old") == 1, "history persists exactly one old-call call");
         if (!string.Equals(mode, "human", StringComparison.Ordinal))
         {
             Check(old.IndexOf(Missing, StringComparison.Ordinal) >= 0, "automatic result explains missing approval");
